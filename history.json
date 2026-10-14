@@ -1,0 +1,27 @@
+[
+    {
+        "elapsed_seconds": 41.94,
+        "wpm": 1.14,
+        "accuracy": 3.23
+    },
+    {
+        "elapsed_seconds": 41.39,
+        "wpm": 0.0,
+        "accuracy": 0
+    },
+    {
+        "elapsed_seconds": 7.35,
+        "wpm": 0.0,
+        "accuracy": 0
+    },
+    {
+        "elapsed_seconds": 1.54,
+        "wpm": 0.0,
+        "accuracy": 0
+    },
+    {
+        "elapsed_seconds": 101.59,
+        "wpm": 30.71,
+        "accuracy": 98.47
+    }
+]
