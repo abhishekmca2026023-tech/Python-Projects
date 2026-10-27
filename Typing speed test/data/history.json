@@ -3,5 +3,68 @@
         "elapsed_seconds": 92.6,
         "wpm": 32.27,
         "accuracy": 100
+    },
+    {
+        "elapsed_seconds": 82.44,
+        "wpm": 32.31,
+        "accuracy": 99.55
+    },
+    {
+        "elapsed_seconds": 30.0,
+        "wpm": 22.8,
+        "accuracy": 100,
+        "mode": "30-second Sprint"
+    },
+    {
+        "elapsed_seconds": 30.0,
+        "wpm": 28.4,
+        "accuracy": 94.37,
+        "mode": "30-second Sprint",
+        "mistakes": {
+            "substitutions": [
+                {
+                    "expected": "l",
+                    "typed": "L",
+                    "count": 1
+                },
+                {
+                    "expected": "o",
+                    "typed": "u",
+                    "count": 1
+                }
+            ],
+            "missed": {
+                "n": 1
+            },
+            "extra": {
+                "d": 1
+            }
+        }
+    },
+    {
+        "elapsed_seconds": 30.0,
+        "wpm": 30.8,
+        "accuracy": 94.81,
+        "mode": "30-second Sprint",
+        "mistakes": {
+            "substitutions": [
+                {
+                    "expected": "C",
+                    "typed": "c",
+                    "count": 1
+                },
+                {
+                    "expected": "W",
+                    "typed": "w",
+                    "count": 1
+                }
+            ],
+            "missed": {
+                "e": 1
+            },
+            "extra": {
+                "e": 1
+            }
+        }
     }
 ]
