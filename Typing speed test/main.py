@@ -1,3 +1,5 @@
+"""A command-line typing test with timed sprints and saved statistics."""
+
 from collections import Counter
 from difflib import SequenceMatcher
 import json
@@ -33,11 +35,12 @@ SENTENCE_POOL = [
 
 
 def calculate_metrics(start_time, end_time, target_sentence, user_input):
-    """Calculate elapsed time, typing speed, and character accuracy."""
+    """Return the time, words per minute, and accuracy for one test."""
     elapsed_seconds = max(0, end_time - start_time)
     elapsed_minutes = max(elapsed_seconds / 60, 0.001)
     wpm = (len(user_input) / CHARS_PER_WORD) / elapsed_minutes
 
+    # Compare each target character with the typed text to count edits.
     edit_row = list(range(len(user_input) + 1))
     for target_char in target_sentence:
         next_row = [edit_row[0] + 1]
@@ -66,10 +69,12 @@ def calculate_metrics(start_time, end_time, target_sentence, user_input):
 
 
 def analyze_mistakes(target_text, user_input):
+    """Count characters typed incorrectly, skipped, or added by mistake."""
     substitutions = Counter()
     missed = Counter()
     extra = Counter()
 
+    # SequenceMatcher lines up matching parts so edits can be grouped by type.
     matcher = SequenceMatcher(None, target_text, user_input, autojunk=False)
     for operation, target_start, target_end, input_start, input_end in matcher.get_opcodes():
         if operation == "replace":
@@ -97,6 +102,7 @@ def analyze_mistakes(target_text, user_input):
 
 
 def _mistake_total(mistakes):
+    """Add up all substitutions, skipped characters, and extra characters."""
     return (
         sum(item["count"] for item in mistakes.get("substitutions", []))
         + sum(mistakes.get("missed", {}).values())
@@ -105,6 +111,7 @@ def _mistake_total(mistakes):
 
 
 def display_results(metrics):
+    """Print the results from one typing test."""
     print("\n" + "=" * 40)
     print("              TEST RESULTS")
     print("=" * 40)
@@ -117,6 +124,7 @@ def display_results(metrics):
 
 
 def load_history():
+    """Read saved test results, or return an empty list if none are available."""
     try:
         with open(HISTORY_FILE, "r", encoding="utf-8") as history_file:
             history = json.load(history_file)
@@ -126,6 +134,7 @@ def load_history():
 
 
 def save_result_to_history(result_data):
+    """Add one test result to the history JSON file."""
     history = load_history()
     history.append(result_data)
     try:
@@ -137,6 +146,7 @@ def save_result_to_history(result_data):
 
 
 def display_history():
+    """Show the ten most recent test results."""
     history = load_history()
     if not history:
         print("\nNo history found yet. Play a game to record stats!")
@@ -158,6 +168,7 @@ def display_history():
 
 
 def _dashboard_entries(history):
+    """Keep well-formed history entries and convert their scores to numbers."""
     entries = []
     for entry in history:
         if not isinstance(entry, dict):
@@ -183,6 +194,7 @@ def _dashboard_entries(history):
 
 
 def display_dashboard():
+    """Summarize saved scores, progress, and common typing mistakes."""
     entries = _dashboard_entries(load_history())
     if not entries:
         print("\nNo valid test results yet. Play a game to populate your dashboard!")
@@ -292,6 +304,7 @@ def display_dashboard():
 
 
 def _record_typed_key(key, typed_chars):
+    """Add a typed key, or remove the last character when Backspace is pressed."""
     if key in ("\r", "\n"):
         return
     if key in ("\b", "\x7f"):
@@ -306,6 +319,7 @@ def _record_typed_key(key, typed_chars):
 
 
 def timed_input(duration_seconds):
+    """Read individual keys until the sprint timer runs out."""
     if not sys.stdin.isatty():
         raise RuntimeError("Timed sprints require an interactive terminal.")
 
@@ -316,6 +330,7 @@ def timed_input(duration_seconds):
     typed_chars = []
 
     if os.name == "nt":
+        # Windows provides direct keyboard input through msvcrt.
         import msvcrt
 
         while (remaining := deadline - time.perf_counter()) > 0:
@@ -328,6 +343,7 @@ def timed_input(duration_seconds):
                 continue
             _record_typed_key(key, typed_chars)
     else:
+        # Unix terminals need character mode so keys arrive before Enter.
         import codecs
         import termios
         import tty
@@ -352,6 +368,7 @@ def timed_input(duration_seconds):
 
 
 def play_game(sprint_duration=None):
+    """Run a standard test or a sprint, then save its results."""
     print("\n" + "=" * 40)
     mode = f"{sprint_duration}-second Sprint" if sprint_duration else "Standard"
     print(f"       STARTING {mode.upper()}")
@@ -395,6 +412,7 @@ def play_game(sprint_duration=None):
     save_result_to_history(metrics)
 
 def main():
+    """Show the menu and run the option the player chooses."""
     while True:
         print("\n" + "=" * 40)
         print("       PYTHON TYPING SPEED TEST")
