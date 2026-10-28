@@ -35,10 +35,15 @@ SENTENCE_POOL = [
 
 
 def calculate_metrics(start_time, end_time, target_sentence, user_input):
-    """Return the time, words per minute, and accuracy for one test."""
+    """Return the time, raw WPM, corrected WPM, and accuracy for one test."""
     elapsed_seconds = max(0, end_time - start_time)
     elapsed_minutes = max(elapsed_seconds / 60, 0.001)
-    wpm = (len(user_input) / CHARS_PER_WORD) / elapsed_minutes
+
+    mistakes = analyze_mistakes(target_sentence, user_input)
+    mistake_total = _mistake_total(mistakes)
+    raw_wpm = (len(user_input) / CHARS_PER_WORD) / elapsed_minutes
+    corrected_characters = max(0, len(user_input) - mistake_total)
+    net_wpm = (corrected_characters / CHARS_PER_WORD) / elapsed_minutes
 
     # Compare each target character with the typed text to count edits.
     edit_row = list(range(len(user_input) + 1))
@@ -63,8 +68,11 @@ def calculate_metrics(start_time, end_time, target_sentence, user_input):
 
     return {
         "elapsed_seconds": round(elapsed_seconds, 2),
-        "wpm": round(wpm, 2),
+        "raw_wpm": round(raw_wpm, 2),
+        "wpm": round(raw_wpm, 2),
+        "net_wpm": round(net_wpm, 2),
         "accuracy": round(max(0, min(100, accuracy)), 2),
+        "mistakes": mistakes,
     }
 
 
@@ -115,11 +123,12 @@ def display_results(metrics):
     print("\n" + "=" * 40)
     print("              TEST RESULTS")
     print("=" * 40)
-    print(f"Mode:       {metrics.get('mode', 'Standard')}")
-    print(f"Time Taken: {metrics['elapsed_seconds']} seconds")
-    print(f"Speed:      {metrics['wpm']} WPM")
-    print(f"Accuracy:   {metrics['accuracy']}%")
-    print(f"Mistakes:   {_mistake_total(metrics['mistakes'])}")
+    print(f"Mode:             {metrics.get('mode', 'Standard')}")
+    print(f"Time Taken:       {metrics['elapsed_seconds']} seconds")
+    print(f"Raw Speed:        {metrics.get('raw_wpm', metrics.get('wpm', 0))} WPM")
+    print(f"Speed after mistakes: {metrics.get('net_wpm', metrics.get('wpm', 0))} WPM")
+    print(f"Accuracy:         {metrics['accuracy']}%")
+    print(f"Mistakes:         {_mistake_total(metrics['mistakes'])}")
     print("=" * 40)
 
 
@@ -152,19 +161,21 @@ def display_history():
         print("\nNo history found yet. Play a game to record stats!")
         return
 
-    print("\n" + "=" * 50)
-    print("                 PAST SCORES")
-    print("=" * 50)
-    print(f"{'Test #':<8} {'Mode':<15} {'WPM':<10} {'Accuracy':<12} {'Time (s)':<10}")
-    print("-" * 65)
+    print("\n" + "=" * 80)
+    print("                             PAST SCORES")
+    print("=" * 80)
+    print(f"{'Test #':<8} {'Mode':<15} {'Raw WPM':<10} {'Net WPM':<10} {'Accuracy':<12} {'Time (s)':<10}")
+    print("-" * 80)
     for index, entry in enumerate(history[-10:], start=1):
+        raw_wpm = entry.get("raw_wpm", entry.get("wpm", 0))
+        net_wpm = entry.get("net_wpm", raw_wpm)
         print(
             f"{index:<8} {entry.get('mode', 'Standard'):<15} "
-            f"{entry.get('wpm', 0):<10} "
+            f"{raw_wpm:<10} {net_wpm:<10} "
             f"{entry.get('accuracy', 0):<12}% "
             f"{entry.get('elapsed_seconds', 0):<10}"
         )
-    print("=" * 65)
+    print("=" * 80)
 
 
 def _dashboard_entries(history):
@@ -407,7 +418,7 @@ def play_game(sprint_duration=None):
 
     metrics = calculate_metrics(start_time, end_time, accuracy_target, user_input)
     metrics["mode"] = mode
-    metrics["mistakes"] = analyze_mistakes(accuracy_target, user_input)
+    metrics["mistakes"] = metrics.get("mistakes", analyze_mistakes(accuracy_target, user_input))
     display_results(metrics)
     save_result_to_history(metrics)
 

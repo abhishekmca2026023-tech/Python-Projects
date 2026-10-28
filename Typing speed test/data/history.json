@@ -66,5 +66,24 @@
                 "e": 1
             }
         }
+    },
+    {
+        "elapsed_seconds": 30.0,
+        "raw_wpm": 39.6,
+        "wpm": 39.6,
+        "net_wpm": 39.2,
+        "accuracy": 98.99,
+        "mistakes": {
+            "substitutions": [
+                {
+                    "expected": "y",
+                    "typed": "t",
+                    "count": 1
+                }
+            ],
+            "missed": {},
+            "extra": {}
+        },
+        "mode": "30-second Sprint"
     }
 ]
