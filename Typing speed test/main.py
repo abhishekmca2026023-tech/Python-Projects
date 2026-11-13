@@ -1,461 +1,429 @@
-"""A command-line typing test with timed sprints and saved statistics."""
-
-from collections import Counter
-from difflib import SequenceMatcher
 import json
-import math
 import os
 import random
-import select
-import statistics
-import sys
 import time
+import tkinter as tk
+from collections import Counter
+from tkinter import messagebox, simpledialog, ttk
+
+LEADERBOARD_FILE = "typing_leaderboard.json"
+
+TEXT_POOLS = {
+    "Easy": [
+        "the quick brown fox jumps over the lazy dog near the quiet river bank",
+        "building speed on a keyboard takes steady daily practice and good posture",
+        "focus on accuracy first and your typing speed will naturally follow over time",
+        "a clear morning walk helps reset your mind before starting a busy work day",
+    ],
+    "Medium": [
+        "Success is not final, failure is not fatal: it is the courage to continue that counts.",
+        "Premature optimization is the root of all evil in software engineering projects.",
+        "Whenever you find yourself on the side of the majority, it is time to pause and reflect.",
+        "Simplicity is about subtracting the obvious and adding the meaningful to your work.",
+    ],
+    "Hard (Symbols & Numbers)": [
+        "Invoice #9482-B totaled $1,450.75 (including 8.25% tax) & shipped on 11/13/2026 @ 09:30 AM!",
+        "Server 192.168.10.254 responded in 12.4ms — CPU load: 84.5%, RAM: 13.8GB / 16.0GB.",
+        "Validate inputs with `^[a-zA-Z0-9_.-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+$` before saving.",
+        "Q4 Revenue: $84,920 (+17.4% YoY) | Margin: 32.1% | Ticket ID: [REQ-7741-X].",
+    ],
+    "Python Code": [
+        "squares = {x: x**2 for x in range(1, 25) if x % 2 == 0}",
+        "def fib(n): return n if n <= 1 else fib(n - 1) + fib(n - 2)",
+        "with open('config.json', 'r', encoding='utf-8') as f: data = json.load(f)",
+        "valid_users = list(filter(lambda u: u.get('active') and u['score'] >= 85, users))",
+    ],
+}
 
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
-CHARS_PER_WORD = 5
+class TypingSpeedApp:
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        self.root.title("Advanced Python Typing Speed Test")
+        self.root.geometry("920x640")
+        self.root.configure(bg="#1e1e2e")
+        self.root.resizable(False, False)
 
-SENTENCE_POOL = [
-    "The advancement of artificial intelligence has revolutionized how we interact with technology. From automated natural language processing to complex data analytics, machine learning algorithms continue to shape the modern digital landscape in unprecedented ways.",
-    
-    "Python is widely regarded as one of the most accessible yet powerful programming languages in the world. Its clean syntax and extensive ecosystem of libraries make it an ideal choice for web development, data science, automation, and software engineering.",
-    
-    "Consistency and deliberate practice are the true cornerstones of mastery. Whether you are learning to play a musical instrument, writing code, or improving your typing speed, daily dedication compounds over time to produce remarkable results.",
-    
-    "Clean code always looks like it was written by someone who cares. Writing maintainable software requires attention to detail, proper documentation, and a willingness to refactor your solutions as requirements evolve over time.",
-    
-    "Open source software relies on global collaboration, transparent code review, and shared knowledge. Developers from diverse backgrounds contribute to projects that power everything from personal computing devices to global enterprise infrastructure.",
-    
-    "Deep in the heart of the ancient forest, sunlight filters through the dense canopy, casting intricate patterns of shadow and light on the mossy floor. The quiet rustle of leaves in the gentle breeze provides a sense of profound peace.",
-    
-    "Time management is not just about fitting as many tasks as possible into a single day; it is about prioritizing meaningful work, establishing clear boundaries, and maintaining sharp focus amidst endless modern distractions."
-]
+        # State variables
+        self.difficulty_var = tk.StringVar(value="Medium")
+        self.duration_var = tk.StringVar(value="Passage")
+        self.custom_text = ""
 
+        self.target_text = ""
+        self.typed_chars = []
+        self.start_time = None
+        self.test_active = False
+        self.test_finished = False
+        self.timer_job = None
 
-def calculate_metrics(start_time, end_time, target_sentence, user_input):
-    """Return the time, raw WPM, corrected WPM, and accuracy for one test."""
-    elapsed_seconds = max(0, end_time - start_time)
-    elapsed_minutes = max(elapsed_seconds / 60, 0.001)
+        # Telemetry across the whole session/run
+        self.completed_chars_offset = 0
+        self.completed_correct_offset = 0
+        self.total_keystrokes = 0
+        self.correct_keystrokes = 0
+        self.missed_keys = Counter()
+        self.peak_wpm = 0
 
-    mistakes = analyze_mistakes(target_sentence, user_input)
-    mistake_total = _mistake_total(mistakes)
-    raw_wpm = (len(user_input) / CHARS_PER_WORD) / elapsed_minutes
-    corrected_characters = max(0, len(user_input) - mistake_total)
-    net_wpm = (corrected_characters / CHARS_PER_WORD) / elapsed_minutes
+        self.high_scores = self.load_leaderboard()
+        self.build_ui()
+        self.reset_test()
 
-    # Compare each target character with the typed text to count edits.
-    edit_row = list(range(len(user_input) + 1))
-    for target_char in target_sentence:
-        next_row = [edit_row[0] + 1]
-        for index, typed_char in enumerate(user_input, start=1):
-            next_row.append(
-                min(
-                    next_row[-1] + 1,
-                    edit_row[index] + 1,
-                    edit_row[index - 1] + (target_char != typed_char),
-                )
+        # Bind global key press so the user can type immediately
+        self.root.bind("<KeyPress>", self.on_key_press)
+
+    def load_leaderboard(self) -> dict:
+        if os.path.exists(LEADERBOARD_FILE):
+            try:
+                with open(LEADERBOARD_FILE, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, OSError):
+                return {}
+        return {}
+
+    def save_high_score(self, mode_key: str, wpm: int, accuracy: float) -> bool:
+        prev_best = self.high_scores.get(mode_key, {}).get("wpm", 0)
+        if wpm > prev_best:
+            self.high_scores[mode_key] = {
+                "wpm": wpm,
+                "accuracy": accuracy,
+                "date": time.strftime("%Y-%m-%d"),
+            }
+            try:
+                with open(LEADERBOARD_FILE, "w", encoding="utf-8") as f:
+                    json.dump(self.high_scores, f, indent=2)
+            except OSError:
+                pass
+            return True
+        return False
+
+    def build_ui(self):
+        # Top Header & Controls
+        header = tk.Frame(self.root, bg="#181825", pady=12, padx=20)
+        header.pack(fill="x")
+
+        tk.Label(
+            header,
+            text="⚡ TYPING SPEED LAB",
+            font=("Consolas", 18, "bold"),
+            fg="#89b4fa",
+            bg="#181825",
+        ).pack(side="left")
+
+        controls = tk.Frame(header, bg="#181825")
+        controls.pack(side="right")
+
+        tk.Label(controls, text="Pool:", fg="#cdd6f4", bg="#181825", font=("Segoe UI", 10)).pack(
+            side="left", padx=(0, 5)
+        )
+        diff_menu = ttk.Combobox(
+            controls,
+            textvariable=self.difficulty_var,
+            values=list(TEXT_POOLS.keys()) + ["Custom"],
+            state="readonly",
+            width=22,
+        )
+        diff_menu.pack(side="left", padx=(0, 12))
+        diff_menu.bind("<<ComboboxSelected>>", self.on_mode_change)
+
+        tk.Label(controls, text="Mode:", fg="#cdd6f4", bg="#181825", font=("Segoe UI", 10)).pack(
+            side="left", padx=(0, 5)
+        )
+        dur_menu = ttk.Combobox(
+            controls,
+            textvariable=self.duration_var,
+            values=["Passage", "15s", "30s", "60s"],
+            state="readonly",
+            width=10,
+        )
+        dur_menu.pack(side="left", padx=(0, 12))
+        dur_menu.bind("<<ComboboxSelected>>", self.on_mode_change)
+
+        tk.Button(
+            controls,
+            text="Restart (Esc)",
+            command=self.reset_test,
+            bg="#f38ba8",
+            fg="#11111b",
+            font=("Segoe UI", 9, "bold"),
+            relief="flat",
+            padx=10,
+            pady=3,
+        ).pack(side="left")
+
+        # Live Metrics Dashboard
+        stats_frame = tk.Frame(self.root, bg="#1e1e2e", pady=16, padx=20)
+        stats_frame.pack(fill="x")
+
+        self.stat_labels = {}
+        metrics = [
+            ("net_wpm", "NET WPM", "0", "#a6e3a1"),
+            ("raw_wpm", "RAW WPM", "0", "#89dceb"),
+            ("accuracy", "ACCURACY", "100.0%", "#f9e2af"),
+            ("timer", "TIME", "0.0s", "#cba6f7"),
+            ("best", "PERSONAL BEST", "0 WPM", "#fab387"),
+        ]
+
+        for key, title, default, color in metrics:
+            card = tk.Frame(stats_frame, bg="#313244", padx=16, pady=10)
+            card.pack(side="left", expand=True, fill="x", padx=5)
+            tk.Label(
+                card, text=title, font=("Segoe UI", 8, "bold"), fg="#a6adc8", bg="#313244"
+            ).pack(anchor="w")
+            val_lbl = tk.Label(
+                card, text=default, font=("Consolas", 18, "bold"), fg=color, bg="#313244"
             )
-        edit_row = next_row
+            val_lbl.pack(anchor="w")
+            self.stat_labels[key] = val_lbl
 
-    compared_length = max(len(target_sentence), len(user_input))
-    accuracy = (
-        (compared_length - edit_row[-1]) / compared_length * 100
-        if compared_length
-        else 0
-    )
+        # Target Passage Display
+        text_container = tk.Frame(self.root, bg="#1e1e2e", padx=25, pady=5)
+        text_container.pack(fill="both", expand=True)
 
-    return {
-        "elapsed_seconds": round(elapsed_seconds, 2),
-        "raw_wpm": round(raw_wpm, 2),
-        "wpm": round(raw_wpm, 2),
-        "net_wpm": round(net_wpm, 2),
-        "accuracy": round(max(0, min(100, accuracy)), 2),
-        "mistakes": mistakes,
-    }
-
-
-def analyze_mistakes(target_text, user_input):
-    """Count characters typed incorrectly, skipped, or added by mistake."""
-    substitutions = Counter()
-    missed = Counter()
-    extra = Counter()
-
-    # SequenceMatcher lines up matching parts so edits can be grouped by type.
-    matcher = SequenceMatcher(None, target_text, user_input, autojunk=False)
-    for operation, target_start, target_end, input_start, input_end in matcher.get_opcodes():
-        if operation == "replace":
-            target_chars = target_text[target_start:target_end]
-            input_chars = user_input[input_start:input_end]
-            paired_length = min(len(target_chars), len(input_chars))
-            for index in range(paired_length):
-                if target_chars[index] != input_chars[index]:
-                    substitutions[(target_chars[index], input_chars[index])] += 1
-            missed.update(target_chars[paired_length:])
-            extra.update(input_chars[paired_length:])
-        elif operation == "delete":
-            missed.update(target_text[target_start:target_end])
-        elif operation == "insert":
-            extra.update(user_input[input_start:input_end])
-
-    return {
-        "substitutions": [
-            {"expected": expected, "typed": typed, "count": count}
-            for (expected, typed), count in substitutions.most_common()
-        ],
-        "missed": dict(missed),
-        "extra": dict(extra),
-    }
-
-
-def _mistake_total(mistakes):
-    """Add up all substitutions, skipped characters, and extra characters."""
-    return (
-        sum(item["count"] for item in mistakes.get("substitutions", []))
-        + sum(mistakes.get("missed", {}).values())
-        + sum(mistakes.get("extra", {}).values())
-    )
-
-
-def display_results(metrics):
-    """Print the results from one typing test."""
-    print("\n" + "=" * 40)
-    print("              TEST RESULTS")
-    print("=" * 40)
-    print(f"Mode:             {metrics.get('mode', 'Standard')}")
-    print(f"Time Taken:       {metrics['elapsed_seconds']} seconds")
-    print(f"Raw Speed:        {metrics.get('raw_wpm', metrics.get('wpm', 0))} WPM")
-    print(f"Speed after mistakes: {metrics.get('net_wpm', metrics.get('wpm', 0))} WPM")
-    print(f"Accuracy:         {metrics['accuracy']}%")
-    print(f"Mistakes:         {_mistake_total(metrics['mistakes'])}")
-    print("=" * 40)
-
-
-def load_history():
-    """Read saved test results, or return an empty list if none are available."""
-    try:
-        with open(HISTORY_FILE, "r", encoding="utf-8") as history_file:
-            history = json.load(history_file)
-        return history if isinstance(history, list) else []
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return []
-
-
-def save_result_to_history(result_data):
-    """Add one test result to the history JSON file."""
-    history = load_history()
-    history.append(result_data)
-    try:
-        os.makedirs(DATA_DIR, exist_ok=True)
-        with open(HISTORY_FILE, "w", encoding="utf-8") as history_file:
-            json.dump(history, history_file, indent=4)
-    except OSError:
-        print("Error: Could not save score to history file.")
-
-
-def display_history():
-    """Show the ten most recent test results."""
-    history = load_history()
-    if not history:
-        print("\nNo history found yet. Play a game to record stats!")
-        return
-
-    print("\n" + "=" * 80)
-    print("                             PAST SCORES")
-    print("=" * 80)
-    print(f"{'Test #':<8} {'Mode':<15} {'Raw WPM':<10} {'Net WPM':<10} {'Accuracy':<12} {'Time (s)':<10}")
-    print("-" * 80)
-    for index, entry in enumerate(history[-10:], start=1):
-        raw_wpm = entry.get("raw_wpm", entry.get("wpm", 0))
-        net_wpm = entry.get("net_wpm", raw_wpm)
-        print(
-            f"{index:<8} {entry.get('mode', 'Standard'):<15} "
-            f"{raw_wpm:<10} {net_wpm:<10} "
-            f"{entry.get('accuracy', 0):<12}% "
-            f"{entry.get('elapsed_seconds', 0):<10}"
+        self.text_box = tk.Text(
+            text_container,
+            font=("Consolas", 18),
+            bg="#181825",
+            fg="#585b70",
+            wrap="word",
+            height=7,
+            padx=20,
+            pady=20,
+            relief="flat",
+            state="disabled",
+            cursor="arrow",
         )
-    print("=" * 80)
+        self.text_box.pack(fill="both", expand=True)
 
+        # Configure color tags for character states
+        self.text_box.tag_config("untyped", foreground="#6c7086")
+        self.text_box.tag_config("correct", foreground="#a6e3a1")
+        self.text_box.tag_config("wrong", foreground="#f38ba8", background="#452736")
+        self.text_box.tag_config("cursor", foreground="#cdd6f4", underline=True)
 
-def _dashboard_entries(history):
-    """Keep well-formed history entries and convert their scores to numbers."""
-    entries = []
-    for entry in history:
-        if not isinstance(entry, dict):
-            continue
-        try:
-            wpm = float(entry["wpm"])
-            accuracy = float(entry["accuracy"])
-            elapsed_seconds = float(entry["elapsed_seconds"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        if not all(
-            math.isfinite(value) and value >= 0
-            for value in (wpm, accuracy, elapsed_seconds)
-        ):
-            continue
-        entries.append({
-            "wpm": wpm,
-            "accuracy": accuracy,
-            "elapsed_seconds": elapsed_seconds,
-            "mode": str(entry.get("mode") or "Standard"),
-        })
-    return entries
+        # Analytics & Status Footer
+        footer = tk.Frame(self.root, bg="#181825", padx=25, pady=14)
+        footer.pack(fill="x", side="bottom")
 
-
-
-def display_dashboard():
-    """Summarize saved scores, progress, and common typing mistakes."""
-    entries = _dashboard_entries(load_history())
-    if not entries:
-        print("\nNo valid test results yet. Play a game to populate your dashboard!")
-        return
-
-    wpms = [entry["wpm"] for entry in entries]
-    accuracies = [entry["accuracy"] for entry in entries]
-    total_time = sum(entry["elapsed_seconds"] for entry in entries)
-    best_entry = max(entries, key=lambda entry: entry["wpm"])
-    best_accuracy_entry = max(entries, key=lambda entry: entry["accuracy"])
-
-    print("\n" + "=" * 64)
-    print("                    STATISTICS DASHBOARD")
-    print("=" * 64)
-    print(f"Tests completed:       {len(entries)}")
-    print(f"Average speed:         {statistics.mean(wpms):.2f} WPM")
-    print(f"Median speed:          {statistics.median(wpms):.2f} WPM")
-    print(f"Personal best:         {best_entry['wpm']:.2f} WPM ({best_entry['mode']})")
-    print(f"Average accuracy:      {statistics.mean(accuracies):.2f}%")
-    print(f"Best accuracy:         {best_accuracy_entry['accuracy']:.2f}% ({best_accuracy_entry['mode']})")
-    print(f"Practice time:         {total_time / 60:.1f} minutes")
-    consistency = statistics.pstdev(wpms) if len(wpms) > 1 else 0
-    print(f"Speed variation:       {consistency:.2f} WPM standard deviation")
-
-    recent = entries[-5:]
-    previous = entries[max(0, len(entries) - 10):max(0, len(entries) - 5)]
-    if previous:
-        difference = statistics.mean(entry["wpm"] for entry in recent) - statistics.mean(
-            entry["wpm"] for entry in previous
+        self.analytics_label = tk.Label(
+            footer,
+            text="Start typing anywhere to begin the test... Press [Esc] to reset at any time.",
+            font=("Consolas", 11),
+            fg="#bac2de",
+            bg="#181825",
+            justify="left",
         )
-        direction = "up" if difference > 0 else "down" if difference < 0 else "unchanged"
-        print(
-            f"Recent momentum:       {direction} {abs(difference):.2f} WPM "
-            f"(latest {len(recent)} vs previous {len(previous)} tests)"
-        )
-    else:
-        print("Recent momentum:       Need more tests to compare sessions")
+        self.analytics_label.pack(side="left")
 
-    print("\nMODE BREAKDOWN")
-    print(f"{'Mode':<22} {'Tests':>5} {'Avg WPM':>10} {'Avg accuracy':>15}")
-    print("-" * 56)
-    modes = {}
-    for entry in entries:
-        modes.setdefault(entry["mode"], []).append(entry)
-    for mode, mode_entries in modes.items():
-        print(
-            f"{mode:<22} {len(mode_entries):>5} "
-            f"{statistics.mean(entry['wpm'] for entry in mode_entries):>10.2f} "
-            f"{statistics.mean(entry['accuracy'] for entry in mode_entries):>14.2f}%"
+    def get_mode_key(self) -> str:
+        return f"{self.difficulty_var.get()} | {self.duration_var.get()}"
+
+    def on_mode_change(self, _event=None):
+        # Defocus combobox so spacebar/letters go to the typing handler
+        self.root.focus_set()
+        if self.difficulty_var.get() == "Custom":
+            custom = simpledialog.askstring(
+                "Custom Text",
+                "Paste or type the passage you want to practice:",
+                parent=self.root,
+            )
+            if custom and custom.strip():
+                self.custom_text = " ".join(custom.strip().split())
+            else:
+                self.difficulty_var.set("Medium")
+        self.reset_test()
+
+    def pick_new_passage(self) -> str:
+        pool_name = self.difficulty_var.get()
+        if pool_name == "Custom" and self.custom_text:
+            return self.custom_text
+        pool = TEXT_POOLS.get(pool_name, TEXT_POOLS["Medium"])
+        choices = [t for t in pool if t != self.target_text] or pool
+        return random.choice(choices)
+
+    def reset_test(self):
+        if self.timer_job:
+            self.root.after_cancel(self.timer_job)
+            self.timer_job = None
+
+        self.target_text = self.pick_new_passage()
+        self.typed_chars = []
+        self.start_time = None
+        self.test_active = False
+        self.test_finished = False
+
+        self.completed_chars_offset = 0
+        self.completed_correct_offset = 0
+        self.total_keystrokes = 0
+        self.correct_keystrokes = 0
+        self.missed_keys.clear()
+        self.peak_wpm = 0
+
+        best_wpm = self.high_scores.get(self.get_mode_key(), {}).get("wpm", 0)
+        self.stat_labels["net_wpm"].config(text="0")
+        self.stat_labels["raw_wpm"].config(text="0")
+        self.stat_labels["accuracy"].config(text="100.0%")
+        self.stat_labels["best"].config(text=f"{best_wpm} WPM")
+
+        dur = self.duration_var.get()
+        self.stat_labels["timer"].config(text="0.0s" if dur == "Passage" else dur)
+        self.analytics_label.config(
+            text="Ready! Start typing to launch timer. [BackSpace] fixes errors, [Esc] resets.",
+            fg="#bac2de",
         )
 
-    print("\nRECENT SPEED (oldest to newest)")
-    graph_entries = entries[-10:]
-    maximum_wpm = max(entry["wpm"] for entry in graph_entries)
-    for index, entry in enumerate(graph_entries, start=1):
-        bar_length = max(1, round(entry["wpm"] / maximum_wpm * 20)) if maximum_wpm else 1
-        print(f"{index:>2}. {entry['mode']:<22} {entry['wpm']:>6.2f} |{'#' * bar_length}")
+        self.render_text()
+        self.root.focus_set()
 
-    substitutions = Counter()
-    weak_keys = Counter()
-    missed_keys = Counter()
-    extra_keys = Counter()
-    for entry in load_history():
-        mistakes = entry.get("mistakes") if isinstance(entry, dict) else None
-        if not isinstance(mistakes, dict):
-            continue
-        for item in mistakes.get("substitutions", []):
-            if not isinstance(item, dict):
-                continue
-            expected = item.get("expected")
-            typed = item.get("typed")
-            count = item.get("count")
-            if not isinstance(expected, str) or len(expected) != 1 or not isinstance(typed, str) or len(typed) != 1:
-                continue
-            if not isinstance(count, int) or count < 1:
-                continue
-            substitutions[(expected, typed)] += count
-            weak_keys[expected] += count
-        for key, count in mistakes.get("missed", {}).items():
-            if isinstance(key, str) and len(key) == 1 and isinstance(count, int) and count > 0:
-                missed_keys[key] += count
-                weak_keys[key] += count
-        for key, count in mistakes.get("extra", {}).items():
-            if isinstance(key, str) and len(key) == 1 and isinstance(count, int) and count > 0:
-                extra_keys[key] += count
+    def render_text(self):
+        self.text_box.config(state="normal")
+        self.text_box.delete("1.0", "end")
+        self.text_box.insert("1.0", self.target_text)
 
-    print("\nKEY & MISTAKE ANALYSIS")
-    if not weak_keys and not extra_keys:
-        print("No mistake details in history yet. New tests will build this analysis.")
-    else:
-        print("Most error-prone expected keys:")
-        for key, count in weak_keys.most_common(5):
-            print(f"  {key!r}: {count} errors")
-        if substitutions:
-            print("Common substitutions:")
-            for (expected, typed), count in substitutions.most_common(5):
-                print(f"  {expected!r} typed as {typed!r}: {count}")
-        if missed_keys:
-            print("Often skipped keys:")
-            for key, count in missed_keys.most_common(5):
-                print(f"  {key!r}: {count} times")
-        if extra_keys:
-            print("Often added keys:")
-            for key, count in extra_keys.most_common(5):
-                print(f"  {key!r}: {count} times")
-    print("=" * 64)
+        typed_len = len(self.typed_chars)
+        for i, target_char in enumerate(self.target_text):
+            pos_start = f"1.0 + {i} chars"
+            pos_end = f"1.0 + {i + 1} chars"
+            if i < typed_len:
+                tag = "correct" if self.typed_chars[i] == target_char else "wrong"
+                self.text_box.tag_add(tag, pos_start, pos_end)
+            elif i == typed_len:
+                self.text_box.tag_add("cursor", pos_start, pos_end)
+            else:
+                self.text_box.tag_add("untyped", pos_start, pos_end)
 
+        self.text_box.config(state="disabled")
 
-def _record_typed_key(key, typed_chars):
-    """Add a typed key, or remove the last character when Backspace is pressed."""
-    if key in ("\r", "\n"):
-        return
-    if key in ("\b", "\x7f"):
-        if typed_chars:
-            typed_chars.pop()
-            print("\b \b", end="", flush=True)
-    elif key == "\x03":
-        raise KeyboardInterrupt
-    elif key.isprintable():
-        typed_chars.append(key)
-        print(key, end="", flush=True)
+    def calculate_stats(self):
+        if not self.start_time:
+            return 0, 0, 100.0, 0.0
 
+        elapsed = max(0.05, time.time() - self.start_time)
+        minutes = elapsed / 60.0
 
-def timed_input(duration_seconds):
-    """Read individual keys until the sprint timer runs out."""
-    if not sys.stdin.isatty():
-        raise RuntimeError("Timed sprints require an interactive terminal.")
+        current_correct = sum(
+            1 for i, c in enumerate(self.typed_chars) if c == self.target_text[i]
+        )
+        total_chars = self.completed_chars_offset + len(self.typed_chars)
+        total_correct = self.completed_correct_offset + current_correct
 
-    print(f"Type the passage below. The {duration_seconds}-second sprint ends automatically.")
-    print("Start typing:")
-    start_time = time.perf_counter()
-    deadline = start_time + duration_seconds
-    typed_chars = []
+        raw_wpm = round((total_chars / 5.0) / minutes)
+        net_wpm = round((total_correct / 5.0) / minutes)
+        accuracy = (
+            round((self.correct_keystrokes / self.total_keystrokes) * 100, 1)
+            if self.total_keystrokes > 0
+            else 100.0
+        )
 
-    if os.name == "nt":
-        # Windows provides direct keyboard input through msvcrt.
-        import msvcrt
+        if elapsed >= 1.5 and net_wpm > self.peak_wpm:
+            self.peak_wpm = net_wpm
 
-        while (remaining := deadline - time.perf_counter()) > 0:
-            if not msvcrt.kbhit():
-                time.sleep(min(0.01, remaining))
-                continue
-            key = msvcrt.getwch()
-            if key in ("\x00", "\xe0"):
-                msvcrt.getwch()
-                continue
-            _record_typed_key(key, typed_chars)
-    else:
-        # Unix terminals need character mode so keys arrive before Enter.
-        import codecs
-        import termios
-        import tty
+        return net_wpm, raw_wpm, accuracy, elapsed
 
-        file_descriptor = sys.stdin.fileno()
-        terminal_settings = termios.tcgetattr(file_descriptor)
-        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-        try:
-            tty.setcbreak(file_descriptor)
-            while (remaining := deadline - time.perf_counter()) > 0:
-                readable, _, _ = select.select([file_descriptor], [], [], remaining)
-                if not readable:
-                    break
-                key = decoder.decode(os.read(file_descriptor, 1))
-                if key:
-                    _record_typed_key(key, typed_chars)
-        finally:
-            termios.tcsetattr(file_descriptor, termios.TCSADRAIN, terminal_settings)
-
-    print()
-    return "".join(typed_chars), start_time, time.perf_counter()
-
-
-def play_game(sprint_duration=None):
-    """Run a standard test or a sprint, then save its results."""
-    print("\n" + "=" * 40)
-    mode = f"{sprint_duration}-second Sprint" if sprint_duration else "Standard"
-    print(f"       STARTING {mode.upper()}")
-    print("=" * 40)
-
-    if sprint_duration:
-        target_parts = []
-        target_length = 0
-        while target_length < 700:
-            sentence = random.choice(SENTENCE_POOL)
-            target_parts.append(sentence)
-            target_length += len(sentence) + 1
-        target_sentence = " ".join(target_parts)
-    else:
-        target_sentence = random.choice(SENTENCE_POOL)
-
-    print("\nTarget Passage:" if sprint_duration else "\nTarget Sentence:")
-    print("-" * 40)
-    print(f'"{target_sentence}"')
-    print("-" * 40)
-
-    input("\nPress Enter when you are ready...")
-    if sprint_duration:
-        try:
-            user_input, start_time, end_time = timed_input(sprint_duration)
-        except RuntimeError as error:
-            print(f"\n{error}")
+    def update_timer(self):
+        if not self.test_active:
             return
-        accuracy_target = target_sentence[:len(user_input)]
-    else:
-        print("Type the sentence above and press Enter:")
-        start_time = time.perf_counter()
-        user_input = input(">> ")
-        end_time = time.perf_counter()
-        accuracy_target = target_sentence
 
-    metrics = calculate_metrics(start_time, end_time, accuracy_target, user_input)
-    metrics["mode"] = mode
-    metrics["mistakes"] = metrics.get("mistakes", analyze_mistakes(accuracy_target, user_input))
-    display_results(metrics)
-    save_result_to_history(metrics)
+        net_wpm, raw_wpm, accuracy, elapsed = self.calculate_stats()
+        self.stat_labels["net_wpm"].config(text=str(net_wpm))
+        self.stat_labels["raw_wpm"].config(text=str(raw_wpm))
+        self.stat_labels["accuracy"].config(text=f"{accuracy}%")
 
-def main():
-    """Show the menu and run the option the player chooses."""
-    while True:
-        print("\n" + "=" * 40)
-        print("       PYTHON TYPING SPEED TEST")
-        print("=" * 40)
-        print("1. Standard Test")
-        print("2. 30-second Sprint")
-        print("3. 60-second Sprint")
-        print("4. View History")
-        print("5. Statistics Dashboard")
-        print("6. Exit")
-        
-        choice = input("\nChoose an option (1-6): ").strip()
-        
-        if choice == "1":
-            play_game()
-        elif choice == "2":
-            play_game(sprint_duration=30)
-        elif choice == "3":
-            play_game(sprint_duration=60)
-        elif choice == "4":
-            display_history()
-        elif choice == "5":
-            display_dashboard()
-        elif choice == "6":
-            print("\nThank you for using Python Typing Speed Test. Goodbye!")
-            break
+        dur = self.duration_var.get()
+        if dur == "Passage":
+            self.stat_labels["timer"].config(text=f"{elapsed:.1f}s")
         else:
-            print("\nInvalid choice. Please enter a number from 1 to 6.")
+            limit = int(dur.replace("s", ""))
+            remaining = max(0.0, limit - elapsed)
+            self.stat_labels["timer"].config(text=f"{remaining:.1f}s")
+            if remaining <= 0:
+                self.finish_test()
+                return
+
+        self.timer_job = self.root.after(100, self.update_timer)
+
+    def on_key_press(self, event: tk.Event):
+        if event.keysym == "Escape":
+            self.reset_test()
+            return
+
+        if self.test_finished:
+            return
+
+        if event.keysym == "BackSpace":
+            if self.typed_chars:
+                self.typed_chars.pop()
+                self.render_text()
+            return
+
+        # Ignore modifier keys, navigation keys, and non-printable characters
+        if not event.char or len(event.char) != 1 or not event.char.isprintable():
+            return
+
+        if not self.test_active:
+            self.test_active = True
+            self.start_time = time.time()
+            self.update_timer()
+
+        expected_char = self.target_text[len(self.typed_chars)]
+        self.total_keystrokes += 1
+
+        if event.char == expected_char:
+            self.correct_keystrokes += 1
+        else:
+            label = "SPACE" if expected_char == " " else expected_char
+            self.missed_keys[label] += 1
+
+        self.typed_chars.append(event.char)
+        self.render_text()
+
+        # Check if the current passage is finished
+        if len(self.typed_chars) == len(self.target_text):
+            if self.duration_var.get() == "Passage":
+                self.finish_test()
+            else:
+                # Timed Sprint Mode: bank current passage stats and load next passage
+                self.completed_chars_offset += len(self.typed_chars)
+                self.completed_correct_offset += sum(
+                    1 for i, c in enumerate(self.typed_chars) if c == self.target_text[i]
+                )
+                self.target_text = self.pick_new_passage()
+                self.typed_chars = []
+                self.render_text()
+
+    def finish_test(self):
+        self.test_active = False
+        self.test_finished = True
+        if self.timer_job:
+            self.root.after_cancel(self.timer_job)
+
+        net_wpm, raw_wpm, accuracy, elapsed = self.calculate_stats()
+        cpm = round(net_wpm * 5)
+        is_record = self.save_high_score(self.get_mode_key(), net_wpm, accuracy)
+
+        best_wpm = self.high_scores.get(self.get_mode_key(), {}).get("wpm", net_wpm)
+        self.stat_labels["best"].config(text=f"{best_wpm} WPM")
+
+        if self.missed_keys:
+            top_misses = ", ".join(
+                f"'{k}' ({v}x)" for k, v in self.missed_keys.most_common(5)
+            )
+            miss_summary = f"Problem Keys: {top_misses}"
+        else:
+            miss_summary = "Flawless run! Zero mistyped characters."
+
+        banner = "🏆 NEW RECORD! " if is_record else "Test Complete! "
+        self.analytics_label.config(
+            text=(
+                f"{banner}Net: {net_wpm} WPM ({cpm} CPM) | Peak: {self.peak_wpm} WPM | "
+                f"{miss_summary} | Press [Esc] to play again."
+            ),
+            fg="#a6e3a1" if is_record else "#f9e2af",
+        )
+
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\n\nTyping test cancelled. Goodbye!")
+    app_root = tk.Tk()
+    app = TypingSpeedApp(app_root)
+    app_root.mainloop()
+
+
