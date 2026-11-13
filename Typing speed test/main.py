@@ -6,7 +6,8 @@ import tkinter as tk
 from collections import Counter
 from tkinter import messagebox, simpledialog, ttk
 
-LEADERBOARD_FILE = "typing_leaderboard.json"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+LEADERBOARD_FILE = os.path.join(SCRIPT_DIR, "typing_leaderboard.json")
 
 TEXT_POOLS = {
     "Easy": [
@@ -351,7 +352,11 @@ class TypingSpeedApp:
 
         if event.keysym == "BackSpace":
             if self.typed_chars:
-                self.typed_chars.pop()
+                removed = self.typed_chars.pop()
+                if self.total_keystrokes > 0:
+                    self.total_keystrokes -= 1
+                if removed == self.target_text[len(self.typed_chars)]:
+                    self.correct_keystrokes = max(0, self.correct_keystrokes - 1)
                 self.render_text()
             return
 
@@ -423,7 +428,7 @@ class TypingSpeedApp:
 
 def run_cli_app():
     """Fallback terminal interface for headless environments without a display."""
-    leaderboard_path = os.path.join(os.getcwd(), LEADERBOARD_FILE)
+    leaderboard_path = LEADERBOARD_FILE
 
     def load_history():
         try:
@@ -441,7 +446,7 @@ def run_cli_app():
             print("Unable to save leaderboard.")
 
     def calculate_results(start_time, end_time, text, user_input):
-        elapsed = max(end_time - start_time, 0.01)
+        elapsed = max(end_time - start_time, 0.05)
         minutes = elapsed / 60.0
         correct_chars = sum(1 for expected, actual in zip(text, user_input) if expected == actual)
         total_chars = max(len(user_input), 1)
