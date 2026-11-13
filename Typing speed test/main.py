@@ -421,9 +421,133 @@ class TypingSpeedApp:
         )
 
 
+def run_cli_app():
+    """Fallback terminal interface for headless environments without a display."""
+    leaderboard_path = os.path.join(os.getcwd(), LEADERBOARD_FILE)
+
+    def load_history():
+        try:
+            with open(leaderboard_path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            return data if isinstance(data, dict) else {}
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            return {}
+
+    def save_history(history):
+        try:
+            with open(leaderboard_path, "w", encoding="utf-8") as handle:
+                json.dump(history, handle, indent=2)
+        except OSError:
+            print("Unable to save leaderboard.")
+
+    def calculate_results(start_time, end_time, text, user_input):
+        elapsed = max(end_time - start_time, 0.01)
+        minutes = elapsed / 60.0
+        correct_chars = sum(1 for expected, actual in zip(text, user_input) if expected == actual)
+        total_chars = max(len(user_input), 1)
+        raw_wpm = (len(user_input) / 5.0) / minutes
+        net_wpm = (correct_chars / 5.0) / minutes
+        accuracy = (correct_chars / total_chars) * 100 if total_chars else 100.0
+        return {
+            "elapsed": round(elapsed, 2),
+            "raw_wpm": round(raw_wpm, 2),
+            "net_wpm": round(net_wpm, 2),
+            "accuracy": round(accuracy, 2),
+        }
+
+    def choose_text(mode):
+        pool = TEXT_POOLS.get(mode, TEXT_POOLS["Medium"])
+        return random.choice(pool)
+
+    def record_result(mode, metrics):
+        history = load_history()
+        previous = history.get(mode, {})
+        best = previous.get("wpm", 0)
+        if metrics["net_wpm"] > best:
+            history[mode] = {
+                "wpm": metrics["net_wpm"],
+                "accuracy": metrics["accuracy"],
+                "elapsed": metrics["elapsed"],
+            }
+            save_history(history)
+
+    while True:
+        print("\n=== TYPING SPEED TEST (CLI MODE) ===")
+        print("1. Easy")
+        print("2. Medium")
+        print("3. Hard")
+        print("4. Python Code")
+        print("5. Show Best Scores")
+        print("6. Exit")
+
+        try:
+            choice = input("Choose an option (1-6): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nProgram closed.")
+            return
+
+        if choice == "1":
+            mode = "Easy"
+            duration = None
+        elif choice == "2":
+            mode = "Medium"
+            duration = None
+        elif choice == "3":
+            mode = "Hard (Symbols & Numbers)"
+            duration = None
+        elif choice == "4":
+            mode = "Python Code"
+            duration = None
+        elif choice == "5":
+            scores = load_history()
+            if not scores:
+                print("No saved scores yet.")
+            else:
+                print("\nBest scores:")
+                for key, value in sorted(scores.items()):
+                    print(f"  {key}: {value['wpm']} WPM | {value['accuracy']}% accuracy")
+            continue
+        elif choice == "6":
+            print("Goodbye!")
+            return
+        else:
+            print("Invalid option. Please choose 1-6.")
+            continue
+
+        phrase = choose_text(mode)
+        print(f"\nMode: {mode}")
+        print("Type this exactly:")
+        print(phrase)
+        print("Press Enter when ready...")
+        try:
+            input()
+        except (EOFError, KeyboardInterrupt):
+            print("\nTyping cancelled.")
+            return
+
+        start_time = time.perf_counter()
+        try:
+            typed = input(">> ")
+        except (EOFError, KeyboardInterrupt):
+            print("\nTyping cancelled.")
+            return
+        end_time = time.perf_counter()
+
+        metrics = calculate_results(start_time, end_time, phrase, typed)
+        print(f"\nTime: {metrics['elapsed']}s")
+        print(f"Raw WPM: {metrics['raw_wpm']}")
+        print(f"Net WPM: {metrics['net_wpm']}")
+        print(f"Accuracy: {metrics['accuracy']}%")
+        record_result(mode, metrics)
+
+
 if __name__ == "__main__":
-    app_root = tk.Tk()
-    app = TypingSpeedApp(app_root)
-    app_root.mainloop()
-
-
+    if os.name == "nt" or os.environ.get("DISPLAY"):
+        try:
+            app_root = tk.Tk()
+            app = TypingSpeedApp(app_root)
+            app_root.mainloop()
+        except tk.TclError:
+            run_cli_app()
+    else:
+        run_cli_app()
