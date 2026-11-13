@@ -204,6 +204,7 @@ def _dashboard_entries(history):
     return entries
 
 
+
 def display_dashboard():
     """Summarize saved scores, progress, and common typing mistakes."""
     entries = _dashboard_entries(load_history())
