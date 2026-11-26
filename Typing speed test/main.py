@@ -76,13 +76,21 @@ class TypingSpeedApp:
         if os.path.exists(LEADERBOARD_FILE):
             try:
                 with open(LEADERBOARD_FILE, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    data = json.load(f)
+                if not isinstance(data, dict):
+                    return {}
+                return {
+                    key: value
+                    for key, value in data.items()
+                    if isinstance(key, str) and isinstance(value, dict)
+                }
             except (json.JSONDecodeError, OSError):
                 return {}
         return {}
 
     def save_high_score(self, mode_key: str, wpm: int, accuracy: float) -> bool:
-        prev_best = self.high_scores.get(mode_key, {}).get("wpm", 0)
+        previous = self.high_scores.get(mode_key)
+        prev_best = previous.get("wpm", 0) if isinstance(previous, dict) else 0
         if wpm > prev_best:
             self.high_scores[mode_key] = {
                 "wpm": wpm,
@@ -369,7 +377,11 @@ class TypingSpeedApp:
             self.start_time = time.time()
             self.update_timer()
 
-        expected_char = self.target_text[len(self.typed_chars)]
+        typed_len = len(self.typed_chars)
+        if typed_len >= len(self.target_text):
+            return
+
+        expected_char = self.target_text[typed_len]
         self.total_keystrokes += 1
 
         if event.char == expected_char:
